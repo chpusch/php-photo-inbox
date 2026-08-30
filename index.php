@@ -1,87 +1,90 @@
 <?php
-$uploadFolder = 'CHANGE THIS SECRET FOLDER NAME/';
 
-// Increase the limit for file size to 14 MB
-ini_set('upload_max_filesize', '14M');
-ini_set('post_max_size', '14M');
+declare(strict_types=1);
 
-$uploadedFiles = [];
+namespace PhotoInbox;
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['files'])) {
-    $files = $_FILES['files'];
+use Throwable;
 
-    // Check if the upload folder exists, create it if not
-    if (!file_exists($uploadFolder)) {
-        mkdir($uploadFolder, 0777, true);
-    }
+require __DIR__ . '/src/bootstrap.php';
 
-    $uploadErrors = [];
+/* --------------------------------------------------------------------------
+ * Konfiguration
+ * ------------------------------------------------------------------------ */
 
-    // Loop through the files and perform the upload
-    for ($i = 0; $i < count($files['name']); $i++) {
-        $fileName = $files['name'][$i];
-        $fileTmp = $files['tmp_name'][$i];
-        $fileSize = $files['size'][$i];
-        $fileError = $files['error'][$i];
+$configFile = __DIR__ . '/config.php';
 
-        // Check if there are no errors during upload
-        if ($fileError === 0) {
-            $fileInfo = pathinfo($fileName);
-            $fileExtension = strtolower($fileInfo['extension']);
-            $allowedExtensions = ['jpg', 'jpeg', 'png', 'gif', 'heic'];
-
-            // Check if the file has an allowed image format
-            if (in_array($fileExtension, $allowedExtensions)) {
-                // Add a timestamp to the filename
-                $timestamp = time();
-                $newFileName = $timestamp . '_' . $fileName;
-                $destination = $uploadFolder . $newFileName;
-
-                // Attempt to move the file
-                if (move_uploaded_file($fileTmp, $destination)) {
-                    $uploadedFiles[] = $newFileName;
-                } else {
-                    $uploadErrors[] = "An error occurred while uploading the file $fileName.";
-                }
-            } else {
-                $uploadErrors[] = "Invalid file format for $fileName. Allowed formats: " . implode(', ', $allowedExtensions);
-            }
-        } else {
-            $uploadErrors[] = "An error occurred while uploading the file $fileName.";
-        }
-    }
-
-    // Output upload errors if any
-    if (!empty($uploadErrors)) {
-        foreach ($uploadErrors as $error) {
-            echo $error . "<br>";
-        }
-    } elseif (!empty($uploadedFiles)) {
-        echo "<h2>Upload Erfolgreich!</h2>";
-        echo "<p>Folgende Bilder wurden erfolgreich hochgeladen:</p>";
-        echo "<ul>";
-        foreach ($uploadedFiles as $file) {
-            echo "<li>$file</li>";
-        }
-        echo "</ul>";
-    }
+if (!is_file($configFile)) {
+    http_response_code(500);
+    header('Content-Type: text/plain; charset=utf-8');
+    exit("Es fehlt die config.php.\n\nBitte config.example.php nach config.php kopieren und anpassen.\n");
 }
-?>
 
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Bilder Upload Erfolgreich</title>
-</head>
-<body>
-    <h1>Bilder Upload</h1>
-    <form action="" method="post" enctype="multipart/form-data">
-        <label for="files">Bilder auswählen (max. 14 MB, jpg, jpeg, png, gif, heic):</label>
-        <input type="file" name="files[]" id="files" accept="image/*" multiple>
-        <br>
-        <button type="submit">Hochladen</button>
-    </form>
-</body>
-</html>
+try {
+    $config = Config::fromArray((array) require $configFile);
+} catch (Throwable $e) {
+    http_response_code(500);
+    header('Content-Type: text/plain; charset=utf-8');
+    exit('Konfigurationsfehler: ' . $e->getMessage() . "\n");
+}
+
+/* --------------------------------------------------------------------------
+ * Session + Sicherheits-Header
+ * ------------------------------------------------------------------------ */
+
+Http::startSession();
+Http::sendSecurityHeaders();
+
+$wantsJson = Http::wantsJson();
+
+/* --------------------------------------------------------------------------
+ * POST: Upload verarbeiten, danach Redirect (Post/Redirect/Get)
+ * ------------------------------------------------------------------------ */
+
+if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
+    $report = handleUpload($config);
+
+    if ($wantsJson) {
+        Http::json($report->toArray(), $report->errors === [] ? 200 : 422);
+    }
+
+    // Ohne Redirect würde ein Reload den kompletten Upload wiederholen.
+    Flash::set($report);
+    Http::redirect(Http::selfUrl());
+}
+
+/* --------------------------------------------------------------------------
+ * GET: Formular samt Ergebnis der vorherigen Runde rendern
+ * ------------------------------------------------------------------------ */
+
+$report = Flash::take();
+
+require __DIR__ . '/templates/upload.php';
+
+/* --------------------------------------------------------------------------
+ * Ablauf des Uploads
+ * ------------------------------------------------------------------------ */
+
+function handleUpload(Config $config): UploadReport
+{
+    // Grösser als post_max_size: PHP verwirft den Body, $_POST/$_FILES sind
+    // leer - inklusive des CSRF-Tokens. Diesen Fall zuerst abfangen.
+    if (PhpLimits::postSizeExceeded()) {
+        return UploadReport::failure(sprintf(
+            'Der Upload war insgesamt zu groß. Das Serverlimit liegt bei %s pro Vorgang.',
+            PhpLimits::formatBytes(PhpLimits::toBytes((string) ini_get('post_max_size'))),
+        ));
+    }
+
+    if (!Csrf::isValid($_POST[Csrf::FIELD] ?? null)) {
+        return UploadReport::failure('Die Sitzung ist abgelaufen. Bitte die Seite neu laden und erneut versuchen.');
+    }
+
+    if (!isset($_FILES['files']) || !is_array($_FILES['files'])) {
+        return UploadReport::failure('Es wurde keine Datei ausgewählt.');
+    }
+
+    $uploader = new Uploader($config, new UploadDirectory($config), new FormatDetector());
+
+    return $uploader->handle($_FILES['files']);
+}

@@ -1,0 +1,12 @@
+# Lokale Konfiguration - enthaelt Pfade der jeweiligen Installation
+/config.php
+
+# Zugangsdaten gehoeren niemals ins Repository
+.htpasswd
+
+# Hochgeladene Bilder
+/uploads/
+
+# Werkzeuge
+/vendor/
+.DS_Store

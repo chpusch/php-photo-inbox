@@ -1,4 +1,82 @@
+# =============================================================================
+# Foto-Postfach - Apache-Konfiguration fuer den oeffentlichen Ordner
+# =============================================================================
+
+Options -Indexes -ExecCGI
+DirectoryIndex index.php
+
+# -----------------------------------------------------------------------------
+# 1) Zugangsschutz
+#
+# WICHTIG: AuthUserFile braucht einen ABSOLUTEN Pfad zu einer Datei, die
+# ausserhalb des Document Root liegt. Solange der Platzhalter unten nicht
+# ersetzt ist, liefert Apache einen Fehler - das ist Absicht: lieber eine
+# kaputte Seite als ein offenes Upload-Formular.
+#
+# Passwortdatei anlegen (einmalig, auf dem eigenen Rechner):
+#     htpasswd -c -B .htpasswd BENUTZERNAME
+# Danach per FTP an einen nicht-oeffentlichen Ort legen und den Pfad hier
+# eintragen (der Pfad steht z. B. im Hosting-Panel).
+# -----------------------------------------------------------------------------
 AuthType Basic
-AuthName "Geben Sie Benutzername und Passwort ein"
-AuthUserFile /.htpasswd
+AuthName "Foto-Postfach"
+AuthUserFile /absoluter/pfad/ausserhalb/des/webroots/.htpasswd
 Require valid-user
+
+# -----------------------------------------------------------------------------
+# 2) Interne Dateien nie ausliefern
+# -----------------------------------------------------------------------------
+<FilesMatch "^\.">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order allow,deny
+        Deny from all
+    </IfModule>
+</FilesMatch>
+
+<FilesMatch "^(config(\.example)?\.php|composer\.(json|lock)|README\.md)$">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order allow,deny
+        Deny from all
+    </IfModule>
+</FilesMatch>
+
+# Quellcode und Templates werden nur eingebunden, nie direkt aufgerufen -
+# gesperrt wird pro Verzeichnis in src/.htaccess und templates/.htaccess.
+
+# -----------------------------------------------------------------------------
+# 3) Upload-Limits
+#
+# upload_max_filesize und post_max_size lassen sich zur Laufzeit NICHT per
+# ini_set() setzen - nur hier, in einer php.ini oder ueber das Hosting-Panel.
+# php_value kennt ausserdem nur mod_php; unter PHP-FPM/CGI wuerde eine nackte
+# Anweisung einen 500er ausloesen, daher die IfModule-Klammern.
+# Fuer PHP-FPM stattdessen eine .user.ini mit denselben Werten anlegen.
+# -----------------------------------------------------------------------------
+<IfModule mod_php.c>
+    php_value upload_max_filesize 14M
+    php_value post_max_size       16M
+    php_value max_file_uploads    25
+    php_flag  display_errors      Off
+</IfModule>
+<IfModule mod_php7.c>
+    php_value upload_max_filesize 14M
+    php_value post_max_size       16M
+    php_value max_file_uploads    25
+    php_flag  display_errors      Off
+</IfModule>
+
+# -----------------------------------------------------------------------------
+# 4) Sicherheits-Header (die Anwendung setzt dieselben Header nochmals selbst,
+#    hier greifen sie auch fuer statische Dateien)
+# -----------------------------------------------------------------------------
+<IfModule mod_headers.c>
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set X-Frame-Options "DENY"
+    Header always set Referrer-Policy "no-referrer"
+</IfModule>
