@@ -1,21 +1,14 @@
 <?php
 require __DIR__ . '/lib/setup.php';
 
-// First start: send the visitor to the setup wizard, which creates the
-// folders, permissions, .htaccess and .htpasswd automatically.
-if (!isConfigured()) {
-    header('Location: setup.php');
-    exit;
-}
-
-$config = loadConfig();
-
 $setupErrors = [];
 
 try {
-    // Re-creates anything that is missing (e.g. after a fresh FTP upload).
-    $paths        = ensureEnvironment($config);
-    $uploadFolder = $paths['upload'] . '/';
+    // First start: create the secret upload folder, its permissions and its
+    // .htaccess. Later starts only re-check that everything is still in place.
+    $config = isConfigured() ? loadConfig() : runSetup();
+
+    $uploadFolder = ensureEnvironment($config) . '/';
 } catch (Throwable $e) {
     $setupErrors[] = $e->getMessage();
     $uploadFolder  = null;

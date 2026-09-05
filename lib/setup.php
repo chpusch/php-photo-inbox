@@ -3,8 +3,11 @@
  * Bootstrap / self-setup helpers.
  *
  * Everything the README used to ask for manually (secret upload folder,
- * permissions, .htaccess protection, .htpasswd) is created from here on the
- * first start and re-checked (idempotently) on every following request.
+ * permissions, .htaccess protection) is created on the first start and
+ * re-checked (idempotently) on every following request.
+ *
+ * The page itself stays public - anybody may upload. What is protected is the
+ * upload folder: it is not readable over the web at all.
  */
 
 const CONFIG_FILE = __DIR__ . '/../config.php';
@@ -35,6 +38,25 @@ function denyAllHtaccess(): string
 <IfModule mod_php8.c>
     php_flag engine off
 </IfModule>
+HTACCESS;
+}
+
+/** The root .htaccess: no login, it only keeps the configuration private. */
+function rootHtaccess(): string
+{
+    return <<<'HTACCESS'
+# Generated automatically - do not edit, it will be rewritten on the next start.
+# The upload page is public on purpose, only the configuration is off limits.
+<FilesMatch "^config\.php$">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order allow,deny
+        Deny from all
+    </IfModule>
+</FilesMatch>
+
 HTACCESS;
 }
 
@@ -95,39 +117,6 @@ function ensureFile(string $path, string $content, int $mode = FILE_MODE): void
     @chmod($path, $mode);
 }
 
-function ensureProtectedDirectory(string $path): void
-{
-    ensureDirectory($path);
-    ensureFile($path . '/.htaccess', denyAllHtaccess() . "\n");
-}
-
-/** The .htaccess that puts the whole app behind basic auth. */
-function rootHtaccess(string $htpasswdPath, string $realm): string
-{
-    $htpasswdPath = str_replace('"', '\"', $htpasswdPath);
-    $realm        = str_replace('"', '\"', $realm);
-
-    return <<<HTACCESS
-# Generated automatically - do not edit, it will be rewritten on the next start.
-AuthType Basic
-AuthName "{$realm}"
-AuthUserFile "{$htpasswdPath}"
-Require valid-user
-
-# The generated configuration and the password file are never served.
-<FilesMatch "^(config\.php|\.htpasswd)$">
-    <IfModule mod_authz_core.c>
-        Require all denied
-    </IfModule>
-    <IfModule !mod_authz_core.c>
-        Order allow,deny
-        Deny from all
-    </IfModule>
-</FilesMatch>
-
-HTACCESS;
-}
-
 /**
  * Creates/repairs every folder and file the app needs.
  *
@@ -135,55 +124,34 @@ HTACCESS;
  * content drifted, and permissions are re-applied.
  *
  * @param array<string,mixed> $config
- * @return array<string,string> absolute paths of the prepared locations
+ * @return string absolute path of the upload folder
  */
-function ensureEnvironment(array $config): array
+function ensureEnvironment(array $config): string
 {
-    $root = dirname(__DIR__);
+    $root      = dirname(__DIR__);
+    $uploadDir = $root . '/' . $config['upload_folder'];
 
-    $privateDir = $root . '/' . $config['private_folder'];
-    $uploadDir  = $root . '/' . $config['upload_folder'];
+    ensureDirectory($uploadDir);
+    ensureFile($uploadDir . '/.htaccess', denyAllHtaccess() . "\n");
+    ensureFile($root . '/.htaccess', rootHtaccess());
 
-    ensureProtectedDirectory($privateDir);
-    ensureProtectedDirectory($uploadDir);
-
-    $htpasswd = $privateDir . '/.htpasswd';
-
-    if (is_file($htpasswd)) {
-        @chmod($htpasswd, 0640);
-        ensureFile($root . '/.htaccess', rootHtaccess($htpasswd, $config['auth_realm'] ?? 'Bilder Upload'));
-    }
-
-    return [
-        'private' => $privateDir,
-        'upload'  => $uploadDir,
-        'htpasswd' => $htpasswd,
-    ];
+    return $uploadDir;
 }
 
 /**
- * Runs the first-start setup: picks the secret folder names, creates the
- * directories incl. their .htaccess files and stores the credentials.
+ * First start: picks the secret folder name, creates the directory incl. its
+ * .htaccess and stores the configuration. No user interaction needed.
  *
  * @return array<string,mixed> the freshly written configuration
  */
-function runSetup(string $username, string $password): array
+function runSetup(): array
 {
     $config = [
-        'upload_folder'  => randomFolderName('inbox'),
-        'private_folder' => randomFolderName('.private'),
-        'auth_user'      => $username,
-        'auth_realm'     => 'Bilder Upload',
-        'created_at'     => date('c'),
+        'upload_folder' => randomFolderName('inbox'),
+        'created_at'    => date('c'),
     ];
 
-    $paths = ensureEnvironment($config);
-
-    $hash = password_hash($password, PASSWORD_BCRYPT);
-    ensureFile($paths['htpasswd'], $username . ':' . $hash . "\n", 0640);
-
-    ensureFile(dirname(__DIR__) . '/.htaccess', rootHtaccess($paths['htpasswd'], $config['auth_realm']));
-
+    ensureEnvironment($config);
     saveConfig($config);
 
     return $config;
