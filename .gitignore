@@ -1,0 +1,6 @@
+# Everything below is generated automatically on the first start.
+/config.php
+/.htaccess
+/.htpasswd
+/.private-*/
+/inbox-*/
